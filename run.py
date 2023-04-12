@@ -51,7 +51,7 @@ def extract_titles_from_artist(artist_names):
                 print('Found ' + str((index + 1)) + ' titles!')
 
             # sleep 3 secs to don't miss requests
-            time.sleep(3)
+            time.sleep(1)
 
         print('Find tracks from artist ' + str(name) + ' with Discogs ID: ' + str(id))
         yield {'Title': title_info, 'Collaborations': colab_info, 'Year': year_info,
@@ -68,6 +68,6 @@ if __name__ == '__main__':
 
     graph = bonobo.Graph()
     graph.add_chain(extract_info_from_artist(artist_names[:1]), print_data)
-    graph.add_chain(extract_titles_from_artist(artist_names[:1]), print_data)
+    graph.add_chain(extract_titles_from_artist(artist_names[:1), print_data)
 
     bonobo.run(graph)
