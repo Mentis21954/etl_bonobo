@@ -1,10 +1,12 @@
 import bonobo
 import pandas as pd
 import requests
+import json
 import time
 
 LASTFM_API_KEY = '3f8f9f826bc4b0c8b529828839d38e4b'
 DISCOGS_API_KEY = 'hhNKFVCSbBWJATBYMyIxxjCJDSuDZMBGnCapdhOy'
+
 
 def extract_info_from_artist(artist_names: list):
     # extract for all artists' informations from last fm and store as a dict
@@ -15,8 +17,8 @@ def extract_info_from_artist(artist_names: list):
         print('Search information for artist {} ...'.format(str(name)))
         yield {name: artist_info['artist']['bio']['content']}
 
-def extract_titles_from_artist(artist_names: list):
 
+def extract_info_and_listeners_for_titles(artist_names: list):
     for name in artist_names:
         # get the artist id from artist name
         url = ('https://api.discogs.com/database/search?q=') + name + ('&{?type=artist}&token=') + DISCOGS_API_KEY
@@ -29,6 +31,7 @@ def extract_titles_from_artist(artist_names: list):
         print('Found releases from discogs.com for artist ' + str(name) + ' with Discogs ID: ' + str(id))
 
         yield {name: releases['releases']}
+
 
 def extract_info_for_titles(releases: dict):
     # store the releases/tracks info in a list
@@ -55,10 +58,11 @@ def extract_info_for_titles(releases: dict):
                                       'Discogs Price': source['lowest_price']})
         print("Found informations from discogs.com for {} {}'s titles".format(str((index + 1)), artist))
         # sleep 3 secs to don't miss requests
-        time.sleep(3)
+        #time.sleep(1)
 
     # return artist's tracks for transform stage
     yield releases_info
+
 
 def extract_playcounts_from_titles_by_artist(releases: dict):
     # initialize list for playcounts for each title
@@ -68,7 +72,6 @@ def extract_playcounts_from_titles_by_artist(releases: dict):
     artist = str(key[0])
     for index in range(len(releases[artist])):
         title = releases[artist][index]['title']
-        print(title)
         url = 'https://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key=' + LASTFM_API_KEY + '&artist=' + artist + '&track=' + title + '&format=json'
 
         try:
@@ -83,22 +86,65 @@ def extract_playcounts_from_titles_by_artist(releases: dict):
             print('Not found playcount from last.fm for title {}'.format(title))
             continue
 
-    return playcounts
+    #with open('playcounts.json', 'w') as outfile:
+        #outfile.write(json.dumps(playcounts))
+    yield playcounts
+
+def clean_the_artist_content(content: dict):
+    content_df = pd.DataFrame(content.values(), columns=['Content'], index=content.keys())
+
+    # remove new line commands, html tags and "", ''
+    content_df['Content'] = content_df['Content'].replace(r'\r+|\n+|\t+', '', regex=True)
+    content_df['Content'] = content_df['Content'].replace(r'<[^<>]*>', '', regex=True)
+    content_df['Content'] = content_df['Content'].replace(r'"', '', regex=True)
+    content_df['Content'] = content_df['Content'].replace(r"'", '', regex=True)
+    print('Clean the informations text')
+
+    yield content_df.to_dict(orient='index')
+
+
+def remove_wrong_values(releases: dict):
+    df = pd.DataFrame(releases)
+    # find and remove the rows/titles where there are no selling prices in discogs.com
+    df = df[df['Discogs Price'].notna()]
+    print('Remove releases where there no selling price in discogs.com')
+    # keep only the rows has positive value of year
+    df = df[df['Year'] > 0]
+    print('Remove releases where have wrong year value in discogs.com')
+
+    #with open('releases_info.json', 'w') as outfile:
+        #outfile.write(df.to_json(orient='columns', compression='infer'))
+    yield df.to_dict(orient='records')
+
+def merge_titles_data():
+    #releases_df = pd.read_json('releases_info.json')
+    playcounts_df = pd.read_json('playcounts.json')
+    print(playcounts_df.head())
+    #df = pd.merge(releases_df, playcounts_df, on='Title')
+    #print('Merge releases and playcounts data for artist {}'.format(self.name))
+    print('Merge releases and playcounts data for artist')
+
+    yield playcounts_df.to_dict(orient='records')
 
 def print_data(data):
     print(data)
-
 
 if __name__ == '__main__':
     # find names from csv file
     df = pd.read_csv('spotify_artist_data.csv')
     artist_names = list(df['Artist Name'].unique())
-    artist_names = artist_names[:2
-                   ]
+    artist_names = artist_names[:1]
+
+    # define graph
     graph = bonobo.Graph()
-    graph.add_chain(extract_info_from_artist(artist_names), print_data)
+    #graph.add_chain(extract_info_from_artist(artist_names), clean_the_artist_content, print_data)
+
+    # set _input to None, so merge won't start on ts own but only after it receives input from the other chains.
+    graph.add_chain(print_data, _input=None)
     releases = extract_titles_from_artist(artist_names)
-    graph.add_chain(releases, extract_playcounts_from_titles_by_artist, print_data)
-    graph.add_chain(extract_info_for_titles, print_data, _input=releases)
+    graph.add_chain(releases, extract_playcounts_from_titles_by_artist, _output= print_data)
+    graph.add_chain(extract_info_for_titles, remove_wrong_values, _input= releases, _output=print_data)
+
+
 
     bonobo.run(graph)
