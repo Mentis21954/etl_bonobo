@@ -17,7 +17,6 @@ def extract_info_from_artist(artist_names: list):
         print('Search information for artist {} ...'.format(str(name)))
         yield {name: artist_info['artist']['bio']['content']}
 
-
 def extract_info_and_listeners_for_titles_by_artist(artist_names: list):
     for name in artist_names:
         # get the artist id from artist name
@@ -62,7 +61,7 @@ def extract_info_and_listeners_for_titles_by_artist(artist_names: list):
                         print(
                             'Found playcount from last.fm and informations from discogs.com for title {}'.format(title))
                         # sleep 3 secs to don't miss requests
-                        # time.sleep(1)
+                        time.sleep(3)
                 else:
                     print('Not found playcount from last.fm for title {}'.format(title))
             except:
@@ -70,7 +69,6 @@ def extract_info_and_listeners_for_titles_by_artist(artist_names: list):
                 continue
 
         yield {name: releases_info}
-
 
 def clean_the_artist_content(content: dict):
     content_df = pd.DataFrame(content.values(), columns=['Content'], index=content.keys())
@@ -83,7 +81,6 @@ def clean_the_artist_content(content: dict):
     print('Clean the informations text')
 
     yield content_df.to_dict(orient='index')
-
 
 def remove_wrong_values(releases: dict):
     key = list(releases.keys())
@@ -99,7 +96,6 @@ def remove_wrong_values(releases: dict):
 
     yield {artist: df.to_dict(orient='records')}
 
-
 def drop_duplicates_titles(releases: dict):
     key = list(releases.keys())
     artist = str(key[0])
@@ -111,35 +107,38 @@ def drop_duplicates_titles(releases: dict):
 
     yield {artist: df.to_dict(orient='index')}
 
-
-def print_data(data):
-    print(data)
-    yield data
-
-
 def load_to_database(data):
-    client = pymongo.MongoClient(
-        "mongodb+srv://user:AotD8lF0WspDIA4i@cluster0.qtikgbg.mongodb.net/?retryWrites=true&w=majority")
-    db = client["mydatabase"]
+    client = pymongo.MongoClient('mongodb+srv://user:AotD8lF0WspDIA4i@cluster0.qtikgbg.mongodb.net/?retryWrites=true&w=majority')
+    db = client['mydatabase']
     artists = db['artists']
 
-    artists.insert_one(data)
-    print('Artist {} insert to DataBase!'.format(data['Artist']))
+    # find artist name
+    key = list(data.keys())
+    artist = str(key[0])
+
+    # check if the data stream is the description artist or releases
+    if 'Content' in data[artist].keys():
+        artists.insert_one({'Artist': artist,
+                            'Description': data[artist]['Content']})
+        print('----Description for Artist {} insert to DataBase!----'.format(artist))
+    else:
+        artists.update_one({'Artist': artist}, {'$set': {'Releases': data[artist]}})
+        print('----Releases for Artist {} insert to DataBase!----'.format(artist))
 
 
 if __name__ == '__main__':
     # find names from csv file
     df = pd.read_csv('spotify_artist_data.csv')
     artist_names = list(df['Artist Name'].unique())
-    artist_names = artist_names[:1]
+    artist_names = artist_names[:2]
 
     # define graph
     graph = bonobo.Graph()
 
     # set _input to None, so the function won't start on ts own but only after it receives input from the other chains.
-    graph.add_chain(print_data, _input=None)
-    graph.add_chain(extract_info_from_artist(artist_names), clean_the_artist_content, _output=print_data)
+    graph.add_chain(load_to_database, _input=None)
+    graph.add_chain(extract_info_from_artist(artist_names), clean_the_artist_content, _output=load_to_database)
     graph.add_chain(extract_info_and_listeners_for_titles_by_artist(artist_names), remove_wrong_values,
-                    drop_duplicates_titles, _output=print_data)
+                    drop_duplicates_titles, _output=load_to_database)
 
     bonobo.run(graph)
